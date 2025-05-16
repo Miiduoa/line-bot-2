@@ -46,9 +46,9 @@ def handle_message(event):
     user_text = event.message.text.strip()
     
     # Get user or group ID for context tracking
-    if event.source.type == 'group':
+    if hasattr(event.source, 'group_id') and event.source.group_id:
         context_id = event.source.group_id
-    elif event.source.type == 'room':
+    elif hasattr(event.source, 'room_id') and event.source.room_id:
         context_id = event.source.room_id
     else:
         context_id = event.source.user_id
@@ -85,9 +85,9 @@ def handle_postback(event):
     data = event.postback.data
     
     # Get user or group ID for context tracking
-    if event.source.type == 'group':
+    if hasattr(event.source, 'group_id') and event.source.group_id:
         context_id = event.source.group_id
-    elif event.source.type == 'room':
+    elif hasattr(event.source, 'room_id') and event.source.room_id:
         context_id = event.source.room_id
     else:
         context_id = event.source.user_id
