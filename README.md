@@ -32,6 +32,8 @@ OWM_API_KEY=你的OpenWeatherMap_API_Key
 
 ## 啟動服務
 
+### 本地開發
+
 ```bash
 python app.py
 ```
@@ -42,6 +44,38 @@ python app.py
 ```bash
 ngrok http 5000
 ```
+
+### Vercel 部署
+
+此專案已配置為可直接部署至 Vercel。專案結構如下：
+
+```
+my_line_bot/
+├── api/
+│   └── callback.py   # Flask 應用程式入口點
+├── requirements.txt  # 相依套件
+└── vercel.json       # Vercel 配置
+```
+
+部署步驟：
+
+1. 註冊 [Vercel](https://vercel.com/) 帳號並安裝 Vercel CLI
+   ```bash
+   npm i -g vercel
+   ```
+
+2. 登入 Vercel
+   ```bash
+   vercel login
+   ```
+
+3. 在專案目錄執行部署
+   ```bash
+   vercel
+   ```
+
+4. 部署完成後，將 Vercel 提供的網址加上 `/callback` 路徑設定為 LINE Bot 的 Webhook URL
+   例如：`https://your-app-name.vercel.app/callback`
 
 ## 使用方法
 

@@ -5,4 +5,5 @@ google-generativeai==0.3.0
 tmdbv3api==1.7.7
 newsapi-python==0.2.7
 pyowm==3.3.0
-python-dotenv==0.19.2 
+python-dotenv==0.19.2
+gunicorn==20.1.0 
