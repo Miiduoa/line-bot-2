@@ -1,11 +1,12 @@
 import os
 import json
 import requests
-from flask import Flask, request, abort
+from flask import Flask, request, abort, jsonify
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 from dotenv import load_dotenv
+import threading
 
 # 載入環境變數
 load_dotenv()
@@ -27,58 +28,71 @@ handler = WebhookHandler(CHANNEL_SECRET)
 # 儲存群組對話脈絡 (測試用，生產可換 Redis 或資料庫)
 conversation_context = {}
 
-@app.route("/api/callback", methods=["POST"])
-def api_callback():
-    return process_webhook()
-
+# 專門用於處理 LINE 的 Webhook 接口
 @app.route("/callback", methods=["POST"])
 def callback():
-    return process_webhook()
-
-def process_webhook():
-    signature = request.headers['X-Line-Signature']
+    # 獲取 X-Line-Signature 頭部值
+    signature = request.headers.get('X-Line-Signature', '')
+    
+    # 獲取請求體作為文本
     body = request.get_data(as_text=True)
+    app.logger.info("Request body: %s", body)
+    
     try:
+        # 驗證簽名
         handler.handle(body, signature)
     except InvalidSignatureError:
+        app.logger.error("Invalid signature")
         abort(400)
+        
+    # 無論後續處理是否成功，立即返回 200 OK
     return 'OK'
 
 @app.route("/", methods=["GET"])
 def home():
     return "LINE Bot is running!"
 
+# 定義 LINE 消息事件處理器
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
-    user_text = event.message.text.strip()
-    group_id = event.source.group_id if hasattr(event.source, 'group_id') else event.source.user_id
+    # 開啟一個新線程來處理消息，以避免延遲 webhook 響應
+    threading.Thread(target=process_message_event, args=(event,)).start()
 
-    # 初始化脈絡
-    if group_id not in conversation_context:
-        conversation_context[group_id] = []
-    conversation_context[group_id].append({"role": "user", "content": user_text})
+# 實際處理消息的函數
+def process_message_event(event):
+    try:
+        user_text = event.message.text.strip()
+        group_id = event.source.group_id if hasattr(event.source, 'group_id') else event.source.user_id
 
-    reply = None
-    # 天氣查詢
-    if '天氣' in user_text:
-        reply = get_weather(user_text)
-    # 新聞查詢
-    elif '新聞' in user_text:
-        reply = get_news()
-    # 電影查詢
-    elif '電影' in user_text:
-        reply = get_movies(user_text)
-    # 搭訕功能
-    elif any(keyword in user_text for keyword in ['哈囉', '妳', '你', '在嗎']):
-        reply = flirt(event, group_id)
-    # 預設：交給 Gemini 生成回應
-    else:
-        reply = chat_with_gemini(group_id)
+        # 初始化脈絡
+        if group_id not in conversation_context:
+            conversation_context[group_id] = []
+        conversation_context[group_id].append({"role": "user", "content": user_text})
 
-    line_bot_api.reply_message(
-        event.reply_token,
-        TextSendMessage(text=reply)
-    )
+        reply = None
+        # 天氣查詢
+        if '天氣' in user_text:
+            reply = get_weather(user_text)
+        # 新聞查詢
+        elif '新聞' in user_text:
+            reply = get_news()
+        # 電影查詢
+        elif '電影' in user_text:
+            reply = get_movies(user_text)
+        # 搭訕功能
+        elif any(keyword in user_text for keyword in ['哈囉', '妳', '你', '在嗎']):
+            reply = flirt(event, group_id)
+        # 預設：交給 Gemini 生成回應
+        else:
+            reply = chat_with_gemini(group_id)
+
+        # 發送回覆
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text=reply)
+        )
+    except Exception as e:
+        app.logger.error(f"Error processing message: {str(e)}")
 
 # 天氣 API 呼叫
 def get_weather(text):

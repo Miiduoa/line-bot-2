@@ -42,28 +42,22 @@ vercel
 
 4. 部署完成後，你會得到一個 URL (例如 `https://your-project.vercel.app`)
 
-5. 回到 LINE Developers 主控台，將 Webhook URL 設定為以下其中之一:
+5. 回到 LINE Developers 主控台，將 Webhook URL 設定為:
 
 ```
 https://your-project.vercel.app/callback
 ```
 
-或
-
-```
-https://your-project.vercel.app/api/callback
-```
-
 6. 確保 LINE Channel 的 "Use webhook" 設定已啟用
 
-### 疑難排解
+### Webhook 重要說明
 
-如果你收到 Webhook 錯誤 (例如 404 Not Found)，請確保:
+根據 LINE 官方文檔，webhook 處理有以下重要要點：
 
-1. 檢查 LINE Developers Console 中的 webhook URL 是否正確
-2. 確保 URL 與程式中定義的路由相符 (程式支援 `/callback` 和 `/api/callback` 兩種路徑)
-3. 確認 Vercel 部署是否成功，並嘗試訪問你的 URL 根路徑確認應用已上線
-4. 檢查 Vercel 的部署日誌查找可能的錯誤原因
+1. **異步處理事件**: 我們已實現異步處理以避免延遲後續事件的處理
+2. **簽名驗證**: 使用 x-line-signature 頭部進行簽名驗證，而非 IP 位址驗證
+3. **狀態碼回應**: 接收到 LINE Platform 的 HTTP POST 請求後必須立即返回 200 狀態碼
+4. **控制台監控**: 如果仍有問題，請在 LINE Developers Console 查看 webhook 狀態
 
 ## 環境變數
 
@@ -96,4 +90,8 @@ python api/index.py
 ngrok http 3000
 ```
 
-4. 將 ngrok 提供的 URL 加上 `/callback` 或 `/api/callback` 作為 LINE Bot Webhook URL 
+4. 將 ngrok 提供的 URL 加上 `/callback` 作為 LINE Bot Webhook URL
+
+### 測試 Webhook
+
+在設置好 webhook URL 後，你可以在 LINE Developers Console 中點擊 "Verify" 按鈕來測試連接。如果看到成功消息，表示你的 webhook 設置正確 
