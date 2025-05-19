@@ -1,11 +1,7 @@
-from http.server import BaseHTTPRequestHandler
 import os
 import json
 import requests
-import base64
-import hmac
-import hashlib
-import threading
+from flask import Flask, request, Response
 from linebot import LineBotApi
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 from linebot.parser import WebhookParser
@@ -24,20 +20,44 @@ NEWS_API_KEY = os.environ.get('NEWS_API_KEY', "5807e3e70bd2424584afdfc6e932108b"
 MOVIE_DB_API_KEY = os.environ.get('MOVIE_DB_API_KEY', "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiIyMzI4YmU1YzdhNDA1OTczZDdjMjA0NDlkYmVkOTg4OCIsIm5iZiI6MS43NDYwNzg5MDI5MTgwMDAyYSs5LCJzdWIiOiI2ODEzMGNiNjgyODI5Y2NhNzExZmJkNDkiLCJzY29wZXMiOlsiYXBpX3JlYWQiXSwidmVyc2lvbiI6MX0.FQlIdfWlf4E0Tw9sYRF7txbWymAby77KnHjTVNFSpdM")
 OWM_API_KEY = os.environ.get('OWM_API_KEY', "CWA-C80C73F3-7042-4D8D-A88A-D39DD2CFF841")
 
+app = Flask(__name__)
 line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
-parser = WebhookParser(CHANNEL_SECRET)
+webhook_parser = WebhookParser(CHANNEL_SECRET)
 
 # 儲存群組對話脈絡 (測試用，生產可換 Redis 或資料庫)
 conversation_context = {}
 
-def validate_signature(body, signature):
-    """驗證 LINE 簽名"""
-    hash = hmac.new(
-        CHANNEL_SECRET.encode('utf-8'),
-        body.encode('utf-8'),
-        hashlib.sha256
-    ).digest()
-    return signature == base64.b64encode(hash).decode('utf-8')
+@app.route('/', methods=['GET'])
+def home():
+    """首頁"""
+    return "LINE Bot is running!"
+
+@app.route('/callback', methods=['POST'])
+def callback():
+    """LINE Webhook 回調"""
+    # 獲取請求簽名和體
+    signature = request.headers.get('X-Line-Signature', '')
+    body = request.get_data(as_text=True)
+    
+    # 立即返回 200 OK
+    # 但在背景處理消息
+    try:
+        events = webhook_parser.parse(body, signature)
+        for event in events:
+            if isinstance(event, MessageEvent) and isinstance(event.message, TextMessage):
+                process_message_event(event)
+    except Exception as e:
+        print(f"Error parsing webhook: {str(e)}")
+    
+    return 'OK'
+
+# 處理所有其他路由
+@app.route('/<path:path>', methods=['GET', 'POST'])
+def catch_all(path):
+    """處理所有其他路由，對 LINE 來說返回 200 OK"""
+    if request.method == 'POST' and 'X-Line-Signature' in request.headers:
+        return callback()
+    return "LINE Bot is running!"
 
 def process_message_event(event):
     """處理消息事件"""
@@ -133,55 +153,4 @@ def chat_with_gemini(group_id, system_prompt=None):
         conversation_context[group_id].append({'role': 'assistant', 'content': reply})
         return reply
     except Exception as e:
-        return f"Sorry, I'm having trouble connecting to my AI services. Error: {str(e)}"
-
-def handle_request(request_body, path, http_method, headers):
-    """處理 HTTP 請求"""
-    # 處理 GET 請求，用於確認服務運行狀態
-    if http_method == 'GET':
-        return {
-            "statusCode": 200,
-            "body": "LINE Bot is running!",
-            "headers": {"Content-Type": "text/plain"}
-        }
-        
-    # 處理來自 LINE 平台的 webhook POST 請求
-    if path == '/callback' and http_method == 'POST':
-        # 獲取簽名
-        signature = headers.get('x-line-signature', '')
-        
-        # 立即準備好 200 OK 回應
-        response = {
-            "statusCode": 200,
-            "body": "OK",
-            "headers": {"Content-Type": "text/plain"}
-        }
-        
-        # 在背景處理事件
-        try:
-            events = parser.parse(request_body, signature)
-            for event in events:
-                if isinstance(event, MessageEvent) and isinstance(event.message, TextMessage):
-                    # 非同步處理消息
-                    process_message_event(event)
-        except Exception as e:
-            print(f"Error processing webhook: {str(e)}")
-            
-        return response
-    
-    # 其他路徑或方法返回 404
-    return {
-        "statusCode": 404,
-        "body": "Not Found",
-        "headers": {"Content-Type": "text/plain"}
-    }
-
-# 為 Vercel 定義的標準入口函數
-def handler(event, context):
-    """Vercel 函數的入口點"""
-    path = event.get('path', '')
-    http_method = event.get('httpMethod', '')
-    headers = event.get('headers', {})
-    body = event.get('body', '')
-    
-    return handle_request(body, path, http_method, headers) 
+        return f"Sorry, I'm having trouble connecting to my AI services. Error: {str(e)}" 
