@@ -8,9 +8,7 @@ import hashlib
 import threading
 from linebot import LineBotApi
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
-from linebot.models.events import Event
 from linebot.parser import WebhookParser
-from urllib.parse import parse_qs
 from dotenv import load_dotenv
 
 # 載入環境變數
@@ -137,58 +135,53 @@ def chat_with_gemini(group_id, system_prompt=None):
     except Exception as e:
         return f"Sorry, I'm having trouble connecting to my AI services. Error: {str(e)}"
 
-class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        """處理 GET 請求，用於確認服務運行狀態"""
-        self.send_response(200)
-        self.send_header('Content-type', 'text/plain')
-        self.end_headers()
-        self.wfile.write('LINE Bot is running!'.encode())
-        return
-    
-    def do_POST(self):
-        """處理來自 LINE 平台的 webhook POST 請求"""
-        # 只處理 /callback 路徑的 POST 請求
-        if self.path != '/callback':
-            self.send_response(404)
-            self.end_headers()
-            return
-
-        # 獲取請求內容長度
-        content_length = int(self.headers['Content-Length'])
-        # 讀取請求體
-        post_data = self.rfile.read(content_length).decode('utf-8')
+def handle_request(request_body, path, http_method, headers):
+    """處理 HTTP 請求"""
+    # 處理 GET 請求，用於確認服務運行狀態
+    if http_method == 'GET':
+        return {
+            "statusCode": 200,
+            "body": "LINE Bot is running!",
+            "headers": {"Content-Type": "text/plain"}
+        }
+        
+    # 處理來自 LINE 平台的 webhook POST 請求
+    if path == '/callback' and http_method == 'POST':
         # 獲取簽名
-        signature = self.headers.get('X-Line-Signature', '')
-
-        # 立即返回 200 OK
-        self.send_response(200)
-        self.send_header('Content-type', 'text/plain')
-        self.end_headers()
-        self.wfile.write('OK'.encode())
+        signature = headers.get('x-line-signature', '')
+        
+        # 立即準備好 200 OK 回應
+        response = {
+            "statusCode": 200,
+            "body": "OK",
+            "headers": {"Content-Type": "text/plain"}
+        }
         
         # 在背景處理事件
         try:
-            events = parser.parse(post_data, signature)
+            events = parser.parse(request_body, signature)
             for event in events:
                 if isinstance(event, MessageEvent) and isinstance(event.message, TextMessage):
-                    # 創建一個新線程來處理消息
-                    threading.Thread(target=process_message_event, args=(event,)).start()
+                    # 非同步處理消息
+                    process_message_event(event)
         except Exception as e:
             print(f"Error processing webhook: {str(e)}")
-        
-        return
+            
+        return response
+    
+    # 其他路徑或方法返回 404
+    return {
+        "statusCode": 404,
+        "body": "Not Found",
+        "headers": {"Content-Type": "text/plain"}
+    }
 
-# 專門為 Vercel 準備的處理函數
+# 為 Vercel 定義的標準入口函數
 def handler(event, context):
-    # 轉換 Vercel 請求為我們的 HTTP 處理器可用格式
-    return Handler().do_POST() if event['httpMethod'] == 'POST' else Handler().do_GET()
-
-# 本地開發時使用
-if __name__ == "__main__":
-    # 使用 Python 內置 HTTP 伺服器運行
-    from http.server import HTTPServer
-    port = int(os.getenv('PORT', 3000))
-    server = HTTPServer(('0.0.0.0', port), Handler)
-    print(f'Server started at port {port}')
-    server.serve_forever() 
+    """Vercel 函數的入口點"""
+    path = event.get('path', '')
+    http_method = event.get('httpMethod', '')
+    headers = event.get('headers', {})
+    body = event.get('body', '')
+    
+    return handle_request(body, path, http_method, headers) 
