@@ -1,12 +1,17 @@
+from http.server import BaseHTTPRequestHandler
 import os
 import json
 import requests
-from flask import Flask, request, abort, jsonify
-from linebot import LineBotApi, WebhookHandler
-from linebot.exceptions import InvalidSignatureError
-from linebot.models import MessageEvent, TextMessage, TextSendMessage
-from dotenv import load_dotenv
+import base64
+import hmac
+import hashlib
 import threading
+from linebot import LineBotApi
+from linebot.models import MessageEvent, TextMessage, TextSendMessage
+from linebot.models.events import Event
+from linebot.parser import WebhookParser
+from urllib.parse import parse_qs
+from dotenv import load_dotenv
 
 # 載入環境變數
 load_dotenv()
@@ -21,45 +26,23 @@ NEWS_API_KEY = os.environ.get('NEWS_API_KEY', "5807e3e70bd2424584afdfc6e932108b"
 MOVIE_DB_API_KEY = os.environ.get('MOVIE_DB_API_KEY', "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiIyMzI4YmU1YzdhNDA1OTczZDdjMjA0NDlkYmVkOTg4OCIsIm5iZiI6MS43NDYwNzg5MDI5MTgwMDAyYSs5LCJzdWIiOiI2ODEzMGNiNjgyODI5Y2NhNzExZmJkNDkiLCJzY29wZXMiOlsiYXBpX3JlYWQiXSwidmVyc2lvbiI6MX0.FQlIdfWlf4E0Tw9sYRF7txbWymAby77KnHjTVNFSpdM")
 OWM_API_KEY = os.environ.get('OWM_API_KEY', "CWA-C80C73F3-7042-4D8D-A88A-D39DD2CFF841")
 
-app = Flask(__name__)
 line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
-handler = WebhookHandler(CHANNEL_SECRET)
+parser = WebhookParser(CHANNEL_SECRET)
 
 # 儲存群組對話脈絡 (測試用，生產可換 Redis 或資料庫)
 conversation_context = {}
 
-# 專門用於處理 LINE 的 Webhook 接口
-@app.route("/callback", methods=["POST"])
-def callback():
-    # 獲取 X-Line-Signature 頭部值
-    signature = request.headers.get('X-Line-Signature', '')
-    
-    # 獲取請求體作為文本
-    body = request.get_data(as_text=True)
-    app.logger.info("Request body: %s", body)
-    
-    try:
-        # 驗證簽名
-        handler.handle(body, signature)
-    except InvalidSignatureError:
-        app.logger.error("Invalid signature")
-        abort(400)
-        
-    # 無論後續處理是否成功，立即返回 200 OK
-    return 'OK'
+def validate_signature(body, signature):
+    """驗證 LINE 簽名"""
+    hash = hmac.new(
+        CHANNEL_SECRET.encode('utf-8'),
+        body.encode('utf-8'),
+        hashlib.sha256
+    ).digest()
+    return signature == base64.b64encode(hash).decode('utf-8')
 
-@app.route("/", methods=["GET"])
-def home():
-    return "LINE Bot is running!"
-
-# 定義 LINE 消息事件處理器
-@handler.add(MessageEvent, message=TextMessage)
-def handle_message(event):
-    # 開啟一個新線程來處理消息，以避免延遲 webhook 響應
-    threading.Thread(target=process_message_event, args=(event,)).start()
-
-# 實際處理消息的函數
 def process_message_event(event):
+    """處理消息事件"""
     try:
         user_text = event.message.text.strip()
         group_id = event.source.group_id if hasattr(event.source, 'group_id') else event.source.user_id
@@ -92,7 +75,7 @@ def process_message_event(event):
             TextSendMessage(text=reply)
         )
     except Exception as e:
-        app.logger.error(f"Error processing message: {str(e)}")
+        print(f"Error processing message: {str(e)}")
 
 # 天氣 API 呼叫
 def get_weather(text):
@@ -154,11 +137,58 @@ def chat_with_gemini(group_id, system_prompt=None):
     except Exception as e:
         return f"Sorry, I'm having trouble connecting to my AI services. Error: {str(e)}"
 
-# 入口點用於本地測試
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 3000))
-    app.run(host='0.0.0.0', port=port)
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        """處理 GET 請求，用於確認服務運行狀態"""
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write('LINE Bot is running!'.encode())
+        return
     
-# Vercel 需要的處理函式
+    def do_POST(self):
+        """處理來自 LINE 平台的 webhook POST 請求"""
+        # 只處理 /callback 路徑的 POST 請求
+        if self.path != '/callback':
+            self.send_response(404)
+            self.end_headers()
+            return
+
+        # 獲取請求內容長度
+        content_length = int(self.headers['Content-Length'])
+        # 讀取請求體
+        post_data = self.rfile.read(content_length).decode('utf-8')
+        # 獲取簽名
+        signature = self.headers.get('X-Line-Signature', '')
+
+        # 立即返回 200 OK
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write('OK'.encode())
+        
+        # 在背景處理事件
+        try:
+            events = parser.parse(post_data, signature)
+            for event in events:
+                if isinstance(event, MessageEvent) and isinstance(event.message, TextMessage):
+                    # 創建一個新線程來處理消息
+                    threading.Thread(target=process_message_event, args=(event,)).start()
+        except Exception as e:
+            print(f"Error processing webhook: {str(e)}")
+        
+        return
+
+# 專門為 Vercel 準備的處理函數
 def handler(event, context):
-    return app 
+    # 轉換 Vercel 請求為我們的 HTTP 處理器可用格式
+    return Handler().do_POST() if event['httpMethod'] == 'POST' else Handler().do_GET()
+
+# 本地開發時使用
+if __name__ == "__main__":
+    # 使用 Python 內置 HTTP 伺服器運行
+    from http.server import HTTPServer
+    port = int(os.getenv('PORT', 3000))
+    server = HTTPServer(('0.0.0.0', port), Handler)
+    print(f'Server started at port {port}')
+    server.serve_forever() 
