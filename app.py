@@ -144,5 +144,7 @@ def handle_group_message(event):
     # TODO: 將群組訊息加入 Gemini 的上下文
     pass
 
-if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+# 添加根路由以便於健康檢查
+@app.route("/")
+def home():
+    return "LINE Bot is running!"
