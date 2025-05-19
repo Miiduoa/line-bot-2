@@ -1,97 +1,83 @@
 # LINE 聊天機器人
 
-這是一個整合了多種 API 的 LINE 聊天機器人，包括天氣、新聞、電影資訊和 AI 對話功能。
+這是一個簡單的LINE聊天機器人專案，可以部署到Vercel。
 
 ## 功能
 
-1. **天氣查詢**: 輸入包含"天氣"關鍵字的訊息
-2. **新聞查詢**: 輸入包含"新聞"關鍵字的訊息
-3. **電影查詢**: 輸入包含"電影"關鍵字的訊息
-4. **搭訕功能**: 輸入包含"哈囉"、"你"、"妳"、"在嗎"等關鍵字的訊息
-5. **AI 對話**: 其他訊息將自動透過 Gemini API 生成回應
+- 回應文字訊息
+- 回應圖片、影片、音訊和貼圖
+- 自動回覆常見問候語
 
-## 部署到 Vercel
+## 前置需求
 
-### 事前準備
+1. 一個 [LINE Developer帳號](https://developers.line.biz/)
+2. 一個 [Vercel帳號](https://vercel.com/)
+3. Node.js 14.0.0 或更高版本
 
-1. 在 [LINE Developers](https://developers.line.biz/) 建立一個 Channel
-2. 在 [Vercel](https://vercel.com/) 建立帳號
+## 設定流程
 
-### 部署步驟
+### LINE 開發者設定
 
-1. 將此專案 clone 到本地，或直接在 Vercel 上導入:
+1. 登入 [LINE Developer Console](https://developers.line.biz/console/)
+2. 建立一個新的 Provider（若沒有）
+3. 建立一個新的 Messaging API 頻道
+4. 記下 `Channel Secret` 和 `Channel Access Token`（將在後續步驟中使用）
 
-```bash
-git clone <repository-url>
-cd <repository-directory>
-```
+### 本地開發
 
-2. 安裝 Vercel CLI (如果你想在本地部署):
+1. 安裝相依套件：
+   ```bash
+   npm install
+   ```
 
-```bash
-npm install -g vercel
-```
+2. 在專案根目錄建立 `.env.local` 檔案，加入以下內容（替換為你的實際資訊）：
+   ```
+   LINE_CHANNEL_ACCESS_TOKEN=你的頻道存取權杖
+   LINE_CHANNEL_SECRET=你的頻道密鑰
+   ```
 
-3. 透過 Vercel CLI 部署:
+3. 本地啟動服務：
+   ```bash
+   npm run dev
+   ```
 
-```bash
-vercel
-```
+4. 使用 [ngrok](https://ngrok.com/) 或類似工具建立公開 URL（用於開發測試）：
+   ```bash
+   ngrok http 3000
+   ```
 
-或者直接在 Vercel 儀表板上導入 GitHub 專案。
+5. 將產生的 URL + `/webhook` 設定為 LINE 開發者控制台中的 Webhook URL
+   例如：`https://your-ngrok-url.ngrok.io/webhook`
 
-4. 部署完成後，你會得到一個 URL (例如 `https://your-project.vercel.app`)
+### Vercel 部署
 
-5. 回到 LINE Developers 主控台，將 Webhook URL 設定為:
+1. 使用 [Vercel CLI](https://vercel.com/cli) 部署：
+   ```bash
+   npm install -g vercel
+   vercel login
+   vercel
+   ```
 
-```
-https://your-project.vercel.app/callback
-```
+2. 或者，將專案推送到 GitHub 並從 Vercel 儀表板連接存儲庫。
 
-6. 確保 LINE Channel 的 "Use webhook" 設定已啟用
+3. 在 Vercel 儀表板上設定環境變數：
+   - `LINE_CHANNEL_ACCESS_TOKEN`
+   - `LINE_CHANNEL_SECRET`
 
-### Webhook 重要說明
+4. 部署完成後，將 Vercel 生成的 URL + `/webhook` 設定為 LINE 開發者控制台中的 Webhook URL
+   例如：`https://your-app.vercel.app/webhook`
 
-根據 LINE 官方文檔，webhook 處理有以下重要要點：
+5. 確保在 LINE 開發者控制台中啟用 Webhook
 
-1. **異步處理事件**: 我們已實現異步處理以避免延遲後續事件的處理
-2. **簽名驗證**: 使用 x-line-signature 頭部進行簽名驗證，而非 IP 位址驗證
-3. **狀態碼回應**: 接收到 LINE Platform 的 HTTP POST 請求後必須立即返回 200 狀態碼
-4. **控制台監控**: 如果仍有問題，請在 LINE Developers Console 查看 webhook 狀態
+## 自訂和擴展
 
-## 環境變數
+你可以修改 `api/index.js` 檔案來自訂機器人的行為：
 
-建議將所有 API 金鑰設置為環境變數。在 Vercel 儀表板中可以設定以下環境變數:
+- `handleEvent` 函數處理文字訊息
+- `handleNonTextContent` 函數處理非文字訊息（圖片、影片等）
 
-- `CHANNEL_ACCESS_TOKEN`: LINE Bot 的 Channel Access Token
-- `CHANNEL_SECRET`: LINE Bot 的 Channel Secret
-- `GEMINI_API_KEY`: Google Gemini API 金鑰
-- `NEWS_API_KEY`: News API 金鑰
-- `MOVIE_DB_API_KEY`: The Movie DB API 金鑰
-- `OWM_API_KEY`: OpenWeatherMap API 金鑰
+## 提示
 
-## 本地開發
-
-1. 安裝依賴:
-
-```bash
-pip install -r requirements.txt
-```
-
-2. 運行應用:
-
-```bash
-python api/index.py
-```
-
-3. 使用工具如 ngrok 建立臨時公開網址:
-
-```bash
-ngrok http 3000
-```
-
-4. 將 ngrok 提供的 URL 加上 `/callback` 作為 LINE Bot Webhook URL
-
-### 測試 Webhook
-
-在設置好 webhook URL 後，你可以在 LINE Developers Console 中點擊 "Verify" 按鈕來測試連接。如果看到成功消息，表示你的 webhook 設置正確 
+- 確保在開發測試期間 Webhook 的 URL 是 HTTPS
+- 部署後請在 LINE 官方帳號設定頁面打開 Webhook
+- 測試機器人前記得先將官方帳號加為好友 

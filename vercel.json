@@ -1,14 +1,19 @@
 {
   "version": 2,
   "builds": [
-    { "src": "api/index.py", "use": "@vercel/python" },
-    { "src": "api/callback.py", "use": "@vercel/python" }
+    {
+      "src": "api/index.js",
+      "use": "@vercel/node"
+    }
   ],
   "routes": [
-    { "src": "/callback", "dest": "/api/callback.py" },
-    { "src": "/(.*)", "dest": "/api/index.py" }
-  ],
-  "env": {
-    "PYTHONPATH": "."
-  }
+    {
+      "src": "/",
+      "dest": "api/index.js"
+    },
+    {
+      "src": "/webhook",
+      "dest": "api/index.js"
+    }
+  ]
 } 

@@ -1,241 +1,148 @@
-import os
-import json
-import requests
 from flask import Flask, request, abort
-from linebot import LineBotApi, WebhookHandler
-from linebot.exceptions import InvalidSignatureError
-from linebot.models import MessageEvent, TextMessage, TextSendMessage, PostbackEvent
-from dotenv import load_dotenv
+from linebot.v3 import WebhookHandler
+from linebot.v3.exceptions import InvalidSignatureError
+from linebot.v3.messaging import Configuration, ApiClient, ReplyMessageRequest, TextMessage
+import google.generativeai as genai
+import requests
+import json
 
-# Load environment variables
-load_dotenv()
+# LINE Bot 設定
+LINE_CHANNEL_ACCESS_TOKEN = 'G5/Jatw/Mm7gpHjRnVG89Mxp+6QWXINk4mGkga8o3g9TRa96NXiOed5ylkNZjuUtGHXFKCV46xX1t73PZkYdjlqIFoJHe0XiPUP4EyRy/jwJ6sqRtXivrQNA0WH+DK9pLUKg/ybSZ1mvGywuK8upBAdB04t89/1O/w1cDnyilFU='
+LINE_CHANNEL_SECRET = 'ff89f01585f2b68301b8f8911174cd87'
 
-# LINE Bot settings
-CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
-CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
+# Google Gemini API 設定
+GOOGLE_GEMINI_API_KEY = 'AlzaSyBWCitsjkm7DPe_aREubKIZjqmgXafVKNE'
+genai.configure(api_key=GOOGLE_GEMINI_API_KEY)
+gemini_model = genai.GenerativeModel('gemini-pro')
 
-# API keys
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-NEWS_API_KEY = os.getenv("NEWS_API_KEY")
-MOVIE_DB_API_KEY = os.getenv("MOVIE_DB_API_KEY") 
-OWM_API_KEY = os.getenv("OWM_API_KEY")
+# NewsAPI 設定
+NEWS_API_KEY = '5807e3e70bd2424584afdfc6e932108b'
+NEWS_API_ENDPOINT = 'https://newsapi.org/v2/top-headlines'
+
+# The Movie Database (TMDb) API 設定
+TMDB_API_KEY = 'eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiIyMzI4YmU1YzdhNDA1OTczZDdjMjA0NDlkYmVkOTg4OCIsIm5iZiI6MS43NDYwNzg5MDI5MTgwMDAyZSs5LCJzdWIiOiI2ODEzMGNiNjgyODI5Y2NhNzExZmJkNDkiLCJzY29wZXMiOlsiYXBpX3JlYWQiXSwidmVyc2lvbjoxfQ.FQlIdfWlf4E0Tw9sYRF7txbWymAby77KnHjTVNFSpdM'
+TMDB_API_BASE_URL = 'https://api.themoviedb.org/3'
+
+# OpenWeatherMap API 設定
+OPENWEATHERMAP_API_KEY = 'CWA-C80C73F3-7042-4D8D-A88A-D39DD2CFF841'
+OPENWEATHERMAP_API_BASE_URL = 'https://api.openweathermap.org/data/2.5/weather'
 
 app = Flask(__name__)
-line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
-handler = WebhookHandler(CHANNEL_SECRET)
 
-# Store conversation context (for development; use Redis or DB in production)
-conversation_context = {}
+# 設定 LINE Messaging API 用戶端
+configuration = Configuration(
+    access_token=LINE_CHANNEL_ACCESS_TOKEN
+)
+line_bot_api = ApiClient(configuration).api
 
-@app.route("/", methods=["GET"])
-def index():
-    return "LINE Bot is running!"
+# 設定 Webhook 處理器
+handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
-@app.route("/callback", methods=["POST"])
+# 簡單的上下文記憶體 (userID -> 對話歷史列表)
+user_context = {}
+
+def get_news(query):
+    """使用 NewsAPI 查詢新聞"""
+    params = {
+        'q': query,
+        'apiKey': NEWS_API_KEY,
+        'language': 'zh-TW',  # 設定為繁體中文
+        'pageSize': 3       # 限制回傳新聞數量
+    }
+    try:
+        response = requests.get(NEWS_API_ENDPOINT, params=params)
+        response.raise_for_status()  # 檢查請求是否成功
+        data = response.json()
+        if data['status'] == 'ok' and data['totalResults'] > 0:
+            news_items = data['articles']
+            news_list = []
+            for item in news_items:
+                title = item['title']
+                url = item['url']
+                news_list.append(f"標題：{title}\n連結：{url}\n")
+            return "\n".join(news_list)
+        else:
+            return "抱歉，找不到相關新聞。"
+    except requests.exceptions.RequestException as e:
+        return f"查詢新聞時發生錯誤：{e}"
+    except json.JSONDecodeError as e:
+        return f"解析新聞資料時發生錯誤：{e}"
+
+@app.route("/callback", methods=['POST'])
 def callback():
-    signature = request.headers.get('X-Line-Signature', '')
+    """LINE Bot 的 Webhook 接收端點"""
+    signature = request.headers['X-Line-Signature']
+
+    # get request body as text
     body = request.get_data(as_text=True)
     app.logger.info("Request body: " + body)
-    
+
+    # handle webhook body
     try:
         handler.handle(body, signature)
     except InvalidSignatureError:
         abort(400)
-    
+
     return 'OK'
 
-@handler.add(MessageEvent, message=TextMessage)
+@handler.add(message_content_type='text')
 def handle_message(event):
-    user_text = event.message.text.strip()
-    
-    # Get user or group ID for context tracking
-    if hasattr(event.source, 'group_id') and event.source.group_id:
-        context_id = event.source.group_id
-    elif hasattr(event.source, 'room_id') and event.source.room_id:
-        context_id = event.source.room_id
-    else:
-        context_id = event.source.user_id
+    """處理文字訊息"""
+    user_id = event.source.user_id
+    message_text = event.message.text
 
-    # Initialize context if needed
-    if context_id not in conversation_context:
-        conversation_context[context_id] = []
-    conversation_context[context_id].append({"role": "user", "content": user_text})
+    # 取得或初始化使用者的對話歷史
+    if user_id not in user_context:
+        user_context[user_id] = []
 
-    reply = None
-    # Weather query
-    if '天氣' in user_text:
-        reply = get_weather(user_text)
-    # News query
-    elif '新聞' in user_text:
-        reply = get_news()
-    # Movie query
-    elif '電影' in user_text:
-        reply = get_movies(user_text)
-    # Flirting feature
-    elif any(keyword in user_text for keyword in ['哈囉', '妳', '你', '在嗎']):
-        reply = flirt(event, context_id)
-    # Default: Generate response using Gemini
-    else:
-        reply = chat_with_gemini(context_id)
-
-    line_bot_api.reply_message(
-        event.reply_token,
-        TextSendMessage(text=reply)
-    )
-
-@handler.add(PostbackEvent)
-def handle_postback(event):
-    data = event.postback.data
-    
-    # Get user or group ID for context tracking
-    if hasattr(event.source, 'group_id') and event.source.group_id:
-        context_id = event.source.group_id
-    elif hasattr(event.source, 'room_id') and event.source.room_id:
-        context_id = event.source.room_id
-    else:
-        context_id = event.source.user_id
-        
-    # Initialize context if needed
-    if context_id not in conversation_context:
-        conversation_context[context_id] = []
-    
-    reply = None
-    
-    if data == 'action=weather':
-        reply = "請輸入想查詢的城市天氣，例如：「台北天氣」"
-    elif data == 'action=news':
-        reply = get_news()
-    elif data == 'action=movies':
-        reply = get_movies("")
-    elif data == 'action=chat':
-        reply = "您好！有什麼我可以幫助您的？"
-    elif data == 'action=about':
-        reply = "我是一個多功能LINE機器人，可以查詢天氣、新聞、電影，並且能和您聊天。"
-    elif data == 'action=help':
-        reply = "使用說明：\n- 輸入「台北天氣」查詢台北天氣\n- 輸入「新聞」獲取最新新聞\n- 輸入「電影」獲取熱門電影推薦\n- 輸入任何文字和我聊天"
-    
-    line_bot_api.reply_message(
-        event.reply_token,
-        TextSendMessage(text=reply)
-    )
-
-# Weather API call
-def get_weather(text):
-    city = extract_city(text) or 'Taipei'
-    url = f"https://api.openweathermap.org/data/2.5/weather?q={city}&appid={OWM_API_KEY}&lang=zh_tw&units=metric"
-    
-    try:
-        response = requests.get(url)
-        response.raise_for_status()
-        res = response.json()
-        
-        desc = res['weather'][0]['description']
-        temp = res['main']['temp']
-        humidity = res['main']['humidity']
-        feels_like = res['main']['feels_like']
-        
-        return f"{city} 現在天氣：{desc}，氣溫 {temp}°C，體感溫度 {feels_like}°C，濕度 {humidity}%"
-    except Exception as e:
-        return f"抱歉，無法取得天氣資訊：{str(e)}"
-
-def extract_city(text):
-    # Common cities in Taiwan and China
-    cities = ['台北', '臺北', 'Taipei', '高雄', '台中', '臺中', '台南', '臺南', '新竹', 
-              '花蓮', '宜蘭', '彰化', '嘉義', '屏東', '苗栗', '南投', '雲林', '基隆', 
-              '桃園', '新北', '金門', '澎湖', '馬祖', '北京', '上海', '廣州', '深圳']
-    
-    for city in cities:
-        if city in text:
-            return city
-    return None
-
-# News API call
-def get_news():
-    url = f"https://newsapi.org/v2/top-headlines?country=tw&apiKey={NEWS_API_KEY}&pageSize=5"
-    
-    try:
-        response = requests.get(url)
-        response.raise_for_status()
-        res = response.json()
-        
-        articles = res.get('articles', [])
-        if not articles:
-            return "抱歉，目前無法取得最新新聞"
-            
-        msg = '今日新聞：\n'
-        for art in articles:
-            msg += f"- {art['title']} ({art['source']['name']})\n"
-        return msg
-    except Exception as e:
-        return f"抱歉，無法取得新聞資訊：{str(e)}"
-
-# Movie API call
-def get_movies(text):
-    url = f"https://api.themoviedb.org/3/movie/popular?api_key={MOVIE_DB_API_KEY}&language=zh-TW&page=1"
-    
-    try:
-        response = requests.get(url)
-        response.raise_for_status()
-        res = response.json()
-        
-        results = res.get('results', [])[:5]
-        if not results:
-            return "抱歉，目前無法取得電影資訊"
-            
-        msg = '熱門電影：\n'
-        for m in results:
-            msg += f"- {m['title']}，評分 {m['vote_average']}\n"
-        return msg
-    except Exception as e:
-        return f"抱歉，無法取得電影資訊：{str(e)}"
-
-# Flirting dialog
-def flirt(event, context_id):
-    return chat_with_gemini(context_id, system_prompt="你是一個風趣幽默的聊天助手，可以進行輕鬆的閒聊。請用繁體中文回覆，答案簡短有趣。")
-
-# Interact with Gemini
-def chat_with_gemini(context_id, system_prompt=None):
-    try:
-        headers = {
-            "Content-Type": "application/json",
-            "x-goog-api-key": GEMINI_API_KEY
-        }
-        
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "parts": [{"text": system_prompt}]})
-        
-        # Convert conversation context to Gemini format
-        for msg in conversation_context[context_id][-10:]:
-            role = "user" if msg["role"] == "user" else "model"
-            messages.append({"role": role, "parts": [{"text": msg["content"]}]})
-        
-        payload = {
-            "contents": messages,
-            "generationConfig": {
-                "temperature": 0.7,
-                "maxOutputTokens": 800,
-            }
-        }
-        
-        response = requests.post(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent",
-            headers=headers,
-            json=payload
-        )
-        response.raise_for_status()
-        result = response.json()
-        
-        if "candidates" in result and result["candidates"]:
-            reply = result["candidates"][0]["content"]["parts"][0]["text"]
-            conversation_context[context_id].append({"role": "assistant", "content": reply})
-            return reply
+    # 判斷是否為新聞查詢
+    if "新聞" in message_text or "最新消息" in message_text:
+        query = message_text.replace("新聞", "").replace("最新消息", "").strip()
+        if query:
+            news_result = get_news(query)
+            reply = f"查詢「{query}」的新聞結果如下：\n\n{news_result}"
         else:
-            return "抱歉，我現在無法回應，請稍後再試。"
-    except Exception as e:
-        return f"與AI對話發生錯誤：{str(e)}"
+            reply = "請問你想查詢什麼關鍵字的新聞呢？"
+        messages = [TextMessage(text=reply)]
+    else:
+        # 將使用者訊息加入對話歷史
+        user_context[user_id].append({"role": "user", "parts": [message_text]})
 
-# For Vercel deployment
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 3000))
-    app.run(host='0.0.0.0', port=port, debug=True) 
+        # 取得 Gemini 的回覆
+        try:
+            response = gemini_model.generate_content(user_context[user_id])
+            gemini_reply = response.text
+            user_context[user_id].append({"role": "model", "parts": [gemini_reply]})
+            messages = [TextMessage(text=gemini_reply)]
+        except Exception as e:
+            reply = f"抱歉，Gemini 發生錯誤：{e}"
+            messages = [TextMessage(text=reply)]
+
+    # 回覆訊息給使用者
+    line_bot_api.reply_message(
+        ReplyMessageRequest(
+            reply_token=event.reply_token,
+            messages=messages
+        )
+    )
+
+@handler.add(message_content_type='group_join')
+def handle_group_join(event):
+    """處理機器人加入群組事件"""
+    reply_message = TextMessage(text="大家好！很高興加入這個群組。請隨時吩咐我查詢新聞、天氣或電影資訊喔！")
+    line_bot_api.reply_message(
+        ReplyMessageRequest(
+            reply_token=event.reply_token,
+            messages=[reply_message]
+        )
+    )
+
+# 在群組中接收訊息 (需要額外處理，這裡先留空)
+@handler.add(message_content_type='text', message_source_type='group')
+def handle_group_message(event):
+    """處理群組中的文字訊息"""
+    # TODO: 將群組訊息加入 Gemini 的上下文
+    pass
+
+if __name__ == "__main__":
+    app.run(debug=True, port=5000)
